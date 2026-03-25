@@ -18,5 +18,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # app
 COPY main.py ./
 
-EXPOSE 8000
-CMD ["sh","-c","uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-keep-alive 120"]
+EXPOSE 10000
+
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000} --timeout-keep-alive 120"]
