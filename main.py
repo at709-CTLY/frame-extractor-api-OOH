@@ -12,13 +12,19 @@ from starlette.background import BackgroundTask
 
 app = FastAPI(title="Frame Extractor API (FFmpeg) — PNG Only")
 
-# CORS (open – Make/Softr friendly)
+cors_origins = os.getenv("CORS_ALLOW_ORIGINS", "*")
+allow_origins = ["*"] if cors_origins == "*" else [o.strip() for o in cors_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/")
+def root():
+    return {"ok": True, "service": "frame-extractor"}
 
 @app.get("/health")
 def health():
@@ -38,13 +44,11 @@ def _ffmpeg_extract(src_path: str, out_dir: str, start_s: int, end_s: int):
     """
     args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
 
-    # trim start
     if start_s and start_s > 0:
         args += ["-ss", str(int(start_s))]
 
     args += ["-i", src_path]
 
-    # trim end via duration
     if end_s and end_s > 0 and (not start_s or end_s > start_s):
         dur = end_s - (start_s or 0)
         if dur > 0:
@@ -53,7 +57,6 @@ def _ffmpeg_extract(src_path: str, out_dir: str, start_s: int, end_s: int):
     # 1 frame every 0.5 seconds = 2 fps
     args += ["-vf", "fps=2"]
 
-    # ALWAYS PNG
     out_pattern = os.path.join(out_dir, "frame_%06d.png")
     args += [out_pattern]
 
@@ -61,12 +64,12 @@ def _ffmpeg_extract(src_path: str, out_dir: str, start_s: int, end_s: int):
 
 @app.post("/extract_frames")
 async def extract_frames(
-    file: UploadFile = File(...),          # field name MUST be "file"
-    start_s: int = Form(0),                # optional trim start (seconds)
-    end_s: int = Form(0),                  # optional trim end (seconds)
-    fmt: str = Form("png"),                # kept for backward compatibility, ignored
-    quality: int = Form(95),               # kept for backward compatibility, ignored
-    zip_name: str = Form("frames.zip"),    # returned filename
+    file: UploadFile = File(...),
+    start_s: int = Form(0),
+    end_s: int = Form(0),
+    fmt: str = Form("png"),
+    quality: int = Form(95),
+    zip_name: str = Form("frames.zip"),
 ):
     """
     Extracts frames from the uploaded video every 0.5 seconds
@@ -79,13 +82,11 @@ async def extract_frames(
     if file is None:
         raise HTTPException(status_code=422, detail="file is required")
 
-    # temp workspace
     tmp_root = tempfile.mkdtemp(prefix="frames_")
     src_path = os.path.join(tmp_root, file.filename or "input.bin")
     frames_dir = os.path.join(tmp_root, "frames")
     os.makedirs(frames_dir, exist_ok=True)
 
-    # save upload
     try:
         with open(src_path, "wb") as f:
             f.write(await file.read())
@@ -93,7 +94,6 @@ async def extract_frames(
         shutil.rmtree(tmp_root, ignore_errors=True)
         raise HTTPException(status_code=400, detail=f"could not save upload: {e}")
 
-    # extract & zip
     try:
         _ffmpeg_extract(src_path, frames_dir, start_s, end_s)
 
@@ -117,6 +117,9 @@ async def extract_frames(
     except subprocess.CalledProcessError as e:
         shutil.rmtree(tmp_root, ignore_errors=True)
         raise HTTPException(status_code=500, detail=f"ffmpeg failed: {e}") from e
+    except HTTPException:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        raise
     except Exception as e:
         shutil.rmtree(tmp_root, ignore_errors=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
